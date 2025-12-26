@@ -1,6 +1,7 @@
 import streamlit as st
 import gensim
 from gensim import corpora
+from transformers import pipeline  # <-- WAJIB untuk Hugging Face pipeline
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 import pickle
@@ -9,11 +10,12 @@ import numpy as np
 import re
 import emoji
 import nltk
-from nltk import downloader # Added this line
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 
+# =============================================================================
 # Ensure NLTK data is downloaded (Streamlit Cloud-safe)
+# =============================================================================
 NLTK_DIR = "/tmp/nltk_data"
 os.makedirs(NLTK_DIR, exist_ok=True)
 if NLTK_DIR not in nltk.data.path:
@@ -22,10 +24,7 @@ if NLTK_DIR not in nltk.data.path:
 try:
     nltk.data.find("tokenizers/punkt")
 except LookupError:
-    # quiet=True biar log tidak berisik; raise_on_error=False biar tidak crash jika jaringan dibatasi
     nltk.download("punkt", download_dir=NLTK_DIR, quiet=True, raise_on_error=False)
-
-    # cek lagi; kalau tetap tidak ada, kasih pesan yang jelas
     try:
         nltk.data.find("tokenizers/punkt")
     except LookupError as e:
@@ -36,16 +35,12 @@ except LookupError:
         )
         st.stop()
 
-
 # =============================================================================
-# 1. Global Variables Re-definition (from notebook)
+# 1. Global Variables
 # =============================================================================
-STOPWORD_PATH = "stopwordbahasa.txt" # Assuming this file is in the same directory
+STOPWORD_PATH = "stopwordbahasa.txt"
 
 additional_stopwords = []
-if os.path.exists(STOPWORD_PATH):
-    with open(STOPWORD_PATH, "r", encoding="utf-8") as f:
-        additional_stopwords = []
 if os.path.exists(STOPWORD_PATH):
     with open(STOPWORD_PATH, "r", encoding="utf-8") as f:
         additional_stopwords = [line.strip() for line in f if line.strip()]
@@ -87,7 +82,7 @@ normalization_dict = {
 }
 
 # =============================================================================
-# 2. Preprocessing Functions Re-definition (from notebook)
+# 2. Preprocessing
 # =============================================================================
 def normalize_repeated_characters(text: str) -> str:
     return re.sub(r"(.)\1{2,}", r"\1", text)
@@ -109,17 +104,16 @@ def preprocess_text(text: str) -> str:
 
 def preprocess_text_lda(text: str) -> str:
     text = stemmer.stem(text)
-    tokens = nltk.tokenize.word_tokenize(text) # Explicitly use nltk.tokenize
+    tokens = nltk.tokenize.word_tokenize(text)
     tokens = [t for t in tokens if t not in stop_words and len(t) > 2]
     return " ".join(tokens)
 
 def preprocess_single_text(text: str) -> str:
     cleaned_text = preprocess_text(text)
-    processed_text_lda = preprocess_text_lda(cleaned_text)
-    return processed_text_lda
+    return preprocess_text_lda(cleaned_text)
 
 # =============================================================================
-# 3. Topic Name Maps Re-definition
+# 3. Topic Name Maps
 # =============================================================================
 topic_name_map_lda = {
     0: "Kemudahan Pengurusan SKCK & Manfaat Aplikasi Polri",
@@ -128,51 +122,41 @@ topic_name_map_lda = {
     3: "Kepuasan Layanan Aplikasi & Akses Cepat"
 }
 
-topic_name_map_lstm = {
-    0: "Kemudahan Pengurusan SKCK & Manfaat Aplikasi Polri",
-    1: "Efisiensi Pendaftaran Online & Bantuan",
-    2: "Isu Teknis, Error & Kendala Penggunaan Aplikasi",
-    3: "Kepuasan Layanan Aplikasi & Akses Cepat"
-}
-
 # =============================================================================
-# 4. Load Models and Processors
+# 4. Load Models
 # =============================================================================
-
-# Suppress TensorFlow warnings related to loading compiled models
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' # Suppress info and warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 @st.cache_resource
 def load_all_models():
-    # LDA Model
+    # LDA
     lda_model = gensim.models.LdaMulticore.load("lda_model.gensim")
     dictionary = corpora.Dictionary.load("lda_dictionary.gensim")
 
-    # IndoBERT Sentiment Pipeline (Hugging Face)
-HF_MODEL_ID = "mdhugol/indonesia-bert-sentiment-classification"  # 3-class: LABEL_0/1/2
-try:
-    indobert_sentiment_pipeline = pipeline(
-        "sentiment-analysis",
-        model=HF_MODEL_ID,
-        tokenizer=HF_MODEL_ID,
-    )
-except Exception as e:
-    indobert_sentiment_pipeline = None
-    st.warning(f"Gagal load IndoBERT dari Hugging Face. IndoBERT dimatikan. Detail: {e}")
+    # IndoBERT Sentiment (Hugging Face)
+    HF_MODEL_ID = "mdhugol/indonesia-bert-sentiment-classification"
+    try:
+        indobert_sentiment_pipeline = pipeline(
+            "sentiment-analysis",
+            model=HF_MODEL_ID,
+            tokenizer=HF_MODEL_ID,
+        )
+    except Exception as e:
+        indobert_sentiment_pipeline = None
+        st.warning(f"Gagal load IndoBERT dari Hugging Face. IndoBERT dimatikan. Detail: {e}")
 
-
-    # LSTM Topic Classification Model
+    # LSTM Topic
     lstm_topic_model = load_model("lstm_topic_model.h5")
-    with open('tokenizer_topic.pkl', 'rb') as handle:
+    with open("tokenizer_topic.pkl", "rb") as handle:
         tokenizer_topic = pickle.load(handle)
-    with open('label_encoder_topic.pkl', 'rb') as handle:
+    with open("label_encoder_topic.pkl", "rb") as handle:
         label_encoder_topic = pickle.load(handle)
 
-    # LSTM Sentiment Classification Model
+    # LSTM Sentiment
     lstm_sentiment_model = load_model("lstm_sentiment_model.h5")
-    with open('tokenizer_sentiment.pkl', 'rb') as handle:
+    with open("tokenizer_sentiment.pkl", "rb") as handle:
         tokenizer_sentiment = pickle.load(handle)
-    with open('label_encoder_sentiment.pkl', 'rb') as handle:
+    with open("label_encoder_sentiment.pkl", "rb") as handle:
         label_encoder_sentiment = pickle.load(handle)
 
     return (
@@ -188,13 +172,13 @@ except Exception as e:
  lstm_sentiment_model_loaded, tokenizer_sentiment_loaded, label_encoder_sentiment_loaded) = load_all_models()
 
 # =============================================================================
-# 5. Define maxlen variables
+# 5. Maxlen
 # =============================================================================
-maxlen = 20  # From previous notebook output
-maxlen_sentiment = 20 # From previous notebook output
+maxlen = 20
+maxlen_sentiment = 20
 
 # =============================================================================
-# 6. Prediction Functions Re-definition
+# 6. Prediction
 # =============================================================================
 def predict_topic_lda(preprocessed_text_lda: str):
     if not preprocessed_text_lda.strip():
@@ -213,9 +197,19 @@ def predict_topic_lstm(preprocessed_text_lda: str):
     sequence = tokenizer_topic_loaded.texts_to_sequences([preprocessed_text_lda])
     padded_sequence = pad_sequences(sequence, maxlen=maxlen, padding='post', truncating='post')
     predictions = lstm_topic_model_loaded.predict(padded_sequence, verbose=0)[0]
-    dominant_topic_id = np.argmax(predictions)
+    dominant_topic_id = int(np.argmax(predictions))
     dominant_topic_name = label_encoder_topic_loaded.inverse_transform([dominant_topic_id])[0]
     return dominant_topic_id, dominant_topic_name
+
+def predict_sentiment_lstm(preprocessed_text_lda: str):
+    if not preprocessed_text_lda.strip():
+        return "neutral"
+    sequence = tokenizer_sentiment_loaded.texts_to_sequences([preprocessed_text_lda])
+    padded_sequence = pad_sequences(sequence, maxlen=maxlen_sentiment, padding='post', truncating='post')
+    predictions = lstm_sentiment_model_loaded.predict(padded_sequence, verbose=0)[0]
+    dominant_sentiment_id = int(np.argmax(predictions))
+    dominant_sentiment_name = label_encoder_sentiment_loaded.inverse_transform([dominant_sentiment_id])[0]
+    return dominant_sentiment_name
 
 def predict_sentiment_indobert(cleaned_text: str):
     if not cleaned_text.strip():
@@ -226,10 +220,7 @@ def predict_sentiment_indobert(cleaned_text: str):
     sentiment_result = indobert_sentiment_pipeline_loaded(cleaned_text)[0]
     label = sentiment_result.get("label", "")
 
-    # mapping umum untuk model 3 kelas (LABEL_0/1/2)
     label_index = {"LABEL_0": "positive", "LABEL_1": "neutral", "LABEL_2": "negative"}
-
-    # kalau labelnya bukan LABEL_0/1/2, pakai fallback berbasis kata
     if label in label_index:
         return label_index[label]
 
@@ -240,62 +231,45 @@ def predict_sentiment_indobert(cleaned_text: str):
         return "negative"
     return "neutral"
 
-
-def predict_sentiment_lstm(preprocessed_text_lda: str):
-    if not preprocessed_text_lda.strip():
-        return "neutral"
-    sequence = tokenizer_sentiment_loaded.texts_to_sequences([preprocessed_text_lda])
-    padded_sequence = pad_sequences(sequence, maxlen=maxlen_sentiment, padding='post', truncating='post')
-    predictions = lstm_sentiment_model_loaded.predict(padded_sequence, verbose=0)[0]
-    dominant_sentiment_id = np.argmax(predictions)
-    dominant_sentiment_name = label_encoder_sentiment_loaded.inverse_transform([dominant_sentiment_id])[0]
-    return dominant_sentiment_name
-
 # =============================================================================
-# Streamlit Application Interface
+# Streamlit UI
 # =============================================================================
-st.title('Aplikasi Analisis Sentimen dan Topik Ulasan Pengguna')
-st.write('Masukkan ulasan pengguna aplikasi Polri Presisi untuk menganalisis topik dan sentimennya.')
+st.title("Aplikasi Analisis Sentimen dan Topik Ulasan Pengguna")
+st.write("Masukkan ulasan pengguna aplikasi Polri Presisi untuk menganalisis topik dan sentimennya.")
 
-user_input = st.text_area('Masukkan ulasan Anda di sini:', '')
+user_input = st.text_area("Masukkan ulasan Anda di sini:", "")
 
-if st.button('Analisis Ulasan'):
+if st.button("Analisis Ulasan"):
     if user_input:
-        # Preprocess text for models
         lda_ready_text = preprocess_single_text(user_input)
         indobert_ready_text = preprocess_text(user_input)
 
-        st.subheader('Hasil Analisis:')
+        st.subheader("Hasil Analisis:")
 
         if not lda_ready_text.strip():
             st.warning("Ulasan setelah preprocessing menjadi kosong. Tidak dapat menganalisis topik dan LSTM sentimen.")
         else:
-            # LDA Topic Prediction
             lda_topic_id, lda_topic_name = predict_topic_lda(lda_ready_text)
             st.write(f"**LDA (Latent Dirichlet Allocation) Topik:** {lda_topic_name} (ID: {lda_topic_id})")
 
-            # LSTM Topic Prediction
             lstm_topic_id, lstm_topic_name = predict_topic_lstm(lda_ready_text)
             st.write(f"**LSTM (Bidirectional LSTM) Topik:** {lstm_topic_name} (ID: {lstm_topic_id})")
 
-            # LSTM Sentiment Prediction
             lstm_sentiment = predict_sentiment_lstm(lda_ready_text)
             st.write(f"**LSTM (Bidirectional LSTM) Sentimen:** {lstm_sentiment}")
 
         if not indobert_ready_text.strip():
             st.warning("Ulasan setelah preprocessing untuk IndoBERT menjadi kosong. Tidak dapat menganalisis sentimen dengan IndoBERT.")
         else:
-       # IndoBERT Sentiment Prediction
-        if indobert_sentiment_pipeline_loaded is None:
-        st.info(
-        "IndoBERT dari Hugging Face tidak tersedia "
-        "(gagal load / dibatasi jaringan). "
-        "Menampilkan hasil LSTM saja."
-    )
-        else:
-    indobert_sentiment = predict_sentiment_indobert(indobert_ready_text)
-    st.write(f"**IndoBERT Sentimen:** {indobert_sentiment}")
-
-
+            # IndoBERT Sentiment Prediction (aman dari error)
+            if indobert_sentiment_pipeline_loaded is None:
+                st.info(
+                    "IndoBERT dari Hugging Face tidak tersedia "
+                    "(gagal load / dibatasi jaringan). "
+                    "Menampilkan hasil LSTM saja."
+                )
+            else:
+                indobert_sentiment = predict_sentiment_indobert(indobert_ready_text)
+                st.write(f"**IndoBERT Sentimen:** {indobert_sentiment}")
     else:
-        st.warning('Silakan masukkan ulasan terlebih dahulu.')
+        st.warning("Silakan masukkan ulasan terlebih dahulu.")
