@@ -46,8 +46,10 @@ STOPWORD_PATH = "stopwordbahasa.txt" # Assuming this file is in the same directo
 additional_stopwords = []
 if os.path.exists(STOPWORD_PATH):
     with open(STOPWORD_PATH, "r", encoding="utf-8") as f:
-        additional_stopwords = [line.strip() for f in f.readlines()]
-    additional_stopwords = [sw for sw in additional_stopwords if sw]  # remove empty
+        additional_stopwords = []
+if os.path.exists(STOPWORD_PATH):
+    with open(STOPWORD_PATH, "r", encoding="utf-8") as f:
+        additional_stopwords = [line.strip() for line in f if line.strip()]
 else:
     st.warning(f"Warning: {STOPWORD_PATH} not found. Continuing without additional stopwords.")
 
