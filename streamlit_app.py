@@ -10,13 +10,14 @@ import numpy as np
 import re
 import emoji
 import nltk
+from nltk import downloader # Added this line
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 
 # Ensure NLTK data is downloaded
 try:
     nltk.data.find('tokenizers/punkt')
-except nltk.downloader.DownloadError:
+except downloader.DownloadError: # Modified this line
     nltk.download('punkt')
 
 # =============================================================================
@@ -27,7 +28,7 @@ STOPWORD_PATH = "stopwordbahasa.txt" # Assuming this file is in the same directo
 additional_stopwords = []
 if os.path.exists(STOPWORD_PATH):
     with open(STOPWORD_PATH, "r", encoding="utf-8") as f:
-        additional_stopwords = [line.strip() for line in f.readlines()]
+        additional_stopwords = [line.strip() for f in f.readlines()]
     additional_stopwords = [sw for sw in additional_stopwords if sw]  # remove empty
 else:
     st.warning(f"Warning: {STOPWORD_PATH} not found. Continuing without additional stopwords.")
@@ -89,7 +90,7 @@ def preprocess_text(text: str) -> str:
 
 def preprocess_text_lda(text: str) -> str:
     text = stemmer.stem(text)
-    tokens = word_tokenize(text)
+    tokens = nltk.tokenize.word_tokenize(text) # Explicitly use nltk.tokenize
     tokens = [t for t in tokens if t not in stop_words and len(t) > 2]
     return " ".join(tokens)
 
