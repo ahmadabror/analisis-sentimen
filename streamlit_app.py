@@ -246,5 +246,3 @@ if st.button('Analisis Ulasan'):
 
     else:
         st.warning('Silakan masukkan ulasan terlebih dahulu.')
-
-```
