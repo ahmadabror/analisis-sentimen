@@ -19,3 +19,5 @@ tokenizers
 sentencepiece
 safetensors
 huggingface_hub
+
+openpyxl
