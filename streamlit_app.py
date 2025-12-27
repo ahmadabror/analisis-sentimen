@@ -400,8 +400,6 @@ st.set_page_config(page_title="Analisis Topik & Sentimen", layout="wide")
 
 st.title("Dashboard Analisis: LDA + IndoBERT + NRS (Per Topik) & Evaluasi LSTM")
 st.caption(
-    "Tab Upload: Topik LDA, Sentimen IndoBERT, Koherensi, Ranking NRS per topik. "
-    "Tab Evaluasi: Confusion Matrix & Akurasi LSTM."
     "Ahmad Abror 2043221003."
 )
 
