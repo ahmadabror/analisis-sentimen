@@ -409,7 +409,6 @@ st.set_page_config(page_title="Analisis Topik & Sentimen", layout="wide")
 
 st.title("Dashboard Analisis: LDA + IndoBERT + NRS (Per Topik) & Evaluasi LSTM")
 st.caption(
-    "Tampilan output dibuat **compact** (tanpa `st.metric`). "
     "Tab Upload: Topik LDA, Sentimen IndoBERT, Koherensi, Ranking NRS per topik. "
     "Tab Evaluasi: Confusion Matrix & Akurasi LSTM."
 )
