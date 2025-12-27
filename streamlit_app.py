@@ -1,5 +1,5 @@
 # =========================
-# streamlit_app.py (FINAL)
+# streamlit_app.py (FULL)
 # =========================
 
 import os
@@ -7,10 +7,10 @@ import re
 import pickle
 
 import numpy as np
+import pandas as pd
 import streamlit as st
 import emoji
 import nltk
-
 import gensim
 from gensim import corpora
 
@@ -22,19 +22,18 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 
 
 # =========================================================
-# 0) ENV (harus di atas import transformers)
+# 0) ENV SETUP (penting untuk deploy Streamlit Cloud)
 # =========================================================
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
-# Kunci untuk menghindari error Keras 3 pada Transformers:
-# - Jangan izinkan Transformers menggunakan TensorFlow
+# Hindari Transformers menyentuh TensorFlow/Keras 3
 os.environ["TRANSFORMERS_NO_TF"] = "1"
 
-# Cache HuggingFace di folder writable Streamlit Cloud
+# Cache HuggingFace di folder writable
 os.environ["HF_HOME"] = "/tmp/hf"
 os.makedirs("/tmp/hf", exist_ok=True)
 
-# Import transformers pipeline secara aman (kalau gagal, app tetap hidup)
+# Import transformers pipeline dengan aman (kalau gagal, app tetap jalan)
 try:
     from transformers import pipeline
 except Exception as e:
@@ -45,7 +44,7 @@ else:
 
 
 # =========================================================
-# 1) NLTK (Streamlit Cloud safe): download punkt + punkt_tab
+# 1) NLTK SETUP (download punkt + punkt_tab)
 # =========================================================
 NLTK_DIR = "/tmp/nltk_data"
 os.makedirs(NLTK_DIR, exist_ok=True)
@@ -53,7 +52,10 @@ if NLTK_DIR not in nltk.data.path:
     nltk.data.path.append(NLTK_DIR)
 
 def ensure_nltk():
-    # NLTK 3.9.x sering butuh punkt_tab juga
+    """
+    NLTK 3.9.x pada beberapa environment butuh `punkt_tab` (tokenizers/punkt_tab/english).
+    Jadi kita pastikan download `punkt` dan `punkt_tab`.
+    """
     try:
         nltk.data.find("tokenizers/punkt")
         nltk.data.find("tokenizers/punkt_tab/english")
@@ -94,7 +96,6 @@ else:
 
 stop_factory = StopWordRemoverFactory()
 more_stopword = ["dengan", "ia", "bahwa", "oleh", "nya", "dana"]
-
 stop_words = set(stop_factory.get_stop_words())
 stop_words.update(more_stopword)
 stop_words.update(additional_stopwords)
@@ -131,16 +132,19 @@ normalization_dict = {
 
 
 # =========================================================
-# 4) PREPROCESSING (FIX UTAMA re.sub)
+# 4) PREPROCESSING
 # =========================================================
 def normalize_repeated_characters(text: str) -> str:
     return re.sub(r"(.)\1{2,}", r"\1", text)
 
 def preprocess_text(text: str) -> str:
+    """
+    Cleaning untuk IndoBERT (tanpa stemming/stopwords).
+    """
     text = str(text)
     text = normalize_repeated_characters(text)
-
     text = emoji.demojize(text)
+
     text = re.sub(r":[a-z_]+:", " ", text)
     text = re.sub(r"http\S+|www\S+|https\S+", " ", text)
     text = re.sub(r"\@\w+|#", " ", text)
@@ -148,15 +152,17 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r"[^\w\s]+", " ", text)
 
     text = text.lower()
-
     for slang, standard in normalization_dict.items():
         text = re.sub(rf"\b{re.escape(slang.lower())}\b", standard.lower(), text)
 
-    # ✅ FIX: harus ada argumen ke-3 (string)
+    # FIX UTAMA: wajib ada argumen 'text' pada re.sub
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 def preprocess_text_lda(text: str) -> str:
+    """
+    Untuk LDA/LSTM: stemming + tokenisasi + stopwords removal.
+    """
     text = stemmer.stem(text)
     tokens = nltk.tokenize.word_tokenize(text)
     tokens = [t for t in tokens if t not in stop_words and len(t) > 2]
@@ -168,7 +174,7 @@ def preprocess_single_text(text: str) -> str:
 
 
 # =========================================================
-# 5) TOPIC MAPS
+# 5) TOPIC MAPS (ubah sesuai label kamu)
 # =========================================================
 topic_name_map_lda = {
     0: "Kemudahan Pengurusan SKCK & Manfaat Aplikasi Polri",
@@ -181,25 +187,22 @@ topic_name_map_lda = {
 # =========================================================
 # 6) LOAD MODELS (robust)
 # =========================================================
-maxlen = 20
-maxlen_sentiment = 20
+MAXLEN_TOPIC = 20
+MAXLEN_SENTIMENT = 20
 
 def _exists_all(paths):
     return all(os.path.exists(p) for p in paths)
 
 @st.cache_resource
 def load_all_models():
-    # ---------- LDA ----------
+    # ---- LDA (optional) ----
     lda_model = None
     dictionary = None
-
-    # Gensim LDA bisa butuh file pendamping .npy
     lda_files_must = [
         "lda_model.gensim",
-        "lda_model.gensim.expElogbeta.npy",
+        "lda_model.gensim.expElogbeta.npy",  # sering hilang, bikin crash kalau tidak ada
         "lda_dictionary.gensim",
     ]
-
     if _exists_all(lda_files_must):
         try:
             lda_model = gensim.models.LdaMulticore.load("lda_model.gensim")
@@ -214,7 +217,7 @@ def load_all_models():
             "Pastikan file berikut ada di repo:\n- " + "\n- ".join(lda_files_must)
         )
 
-    # ---------- IndoBERT Hugging Face (PyTorch only) ----------
+    # ---- IndoBERT Hugging Face (optional) ----
     indobert_pipe = None
     HF_MODEL_ID = "mdhugol/indonesia-bert-sentiment-classification"
 
@@ -229,21 +232,20 @@ def load_all_models():
                 "sentiment-analysis",
                 model=HF_MODEL_ID,
                 tokenizer=HF_MODEL_ID,
-                framework="pt",
-                device=-1,
+                framework="pt",  # paksa PyTorch
+                device=-1,       # CPU
             )
         except Exception as e:
             indobert_pipe = None
             st.warning(f"Gagal load IndoBERT dari Hugging Face. IndoBERT dimatikan. Detail: {e}")
 
-    # ---------- LSTM Topic ----------
+    # ---- LSTM models (required) ----
     lstm_topic_model = load_model("lstm_topic_model.h5")
     with open("tokenizer_topic.pkl", "rb") as f:
         tokenizer_topic = pickle.load(f)
     with open("label_encoder_topic.pkl", "rb") as f:
         label_encoder_topic = pickle.load(f)
 
-    # ---------- LSTM Sentiment ----------
     lstm_sentiment_model = load_model("lstm_sentiment_model.h5")
     with open("tokenizer_sentiment.pkl", "rb") as f:
         tokenizer_sentiment = pickle.load(f)
@@ -266,7 +268,7 @@ def load_all_models():
 
 
 # =========================================================
-# 7) PREDICTIONS
+# 7) PREDICTION HELPERS
 # =========================================================
 def predict_topic_lda(preprocessed_text_lda: str):
     if lda_model_loaded is None or dictionary_loaded is None:
@@ -274,18 +276,18 @@ def predict_topic_lda(preprocessed_text_lda: str):
     if not preprocessed_text_lda.strip():
         return -1, "No content to classify"
     bow = dictionary_loaded.doc2bow(preprocessed_text_lda.split())
-    topic_distribution = lda_model_loaded.get_document_topics(bow)
-    if not topic_distribution:
+    dist = lda_model_loaded.get_document_topics(bow)
+    if not dist:
         return -1, "No topic found"
-    dominant_topic_id = max(topic_distribution, key=lambda x: x[1])[0]
-    dominant_topic_name = topic_name_map_lda.get(dominant_topic_id, "Unknown Topic")
-    return dominant_topic_id, dominant_topic_name
+    topic_id = max(dist, key=lambda x: x[1])[0]
+    topic_name = topic_name_map_lda.get(topic_id, "Unknown Topic")
+    return topic_id, topic_name
 
 def predict_topic_lstm(preprocessed_text_lda: str):
     if not preprocessed_text_lda.strip():
         return -1, "No content to classify"
     seq = tokenizer_topic_loaded.texts_to_sequences([preprocessed_text_lda])
-    pad = pad_sequences(seq, maxlen=maxlen, padding="post", truncating="post")
+    pad = pad_sequences(seq, maxlen=MAXLEN_TOPIC, padding="post", truncating="post")
     preds = lstm_topic_model_loaded.predict(pad, verbose=0)[0]
     idx = int(np.argmax(preds))
     name = label_encoder_topic_loaded.inverse_transform([idx])[0]
@@ -295,13 +297,16 @@ def predict_sentiment_lstm(preprocessed_text_lda: str):
     if not preprocessed_text_lda.strip():
         return "neutral"
     seq = tokenizer_sentiment_loaded.texts_to_sequences([preprocessed_text_lda])
-    pad = pad_sequences(seq, maxlen=maxlen_sentiment, padding="post", truncating="post")
+    pad = pad_sequences(seq, maxlen=MAXLEN_SENTIMENT, padding="post", truncating="post")
     preds = lstm_sentiment_model_loaded.predict(pad, verbose=0)[0]
     idx = int(np.argmax(preds))
     name = label_encoder_sentiment_loaded.inverse_transform([idx])[0]
     return name
 
 def predict_sentiment_indobert(cleaned_text: str):
+    """
+    Output: 'positive' / 'neutral' / 'negative'
+    """
     if not cleaned_text.strip():
         return "neutral"
     if indobert_sentiment_pipeline_loaded is None:
@@ -310,11 +315,13 @@ def predict_sentiment_indobert(cleaned_text: str):
     out = indobert_sentiment_pipeline_loaded(cleaned_text)[0]
     label = out.get("label", "")
 
+    # mapping umum model 3 kelas
     mapping = {"LABEL_0": "positive", "LABEL_1": "neutral", "LABEL_2": "negative"}
     if label in mapping:
         return mapping[label]
 
-    low = label.lower()
+    # fallback
+    low = str(label).lower()
     if "pos" in low:
         return "positive"
     if "neg" in low:
@@ -323,42 +330,174 @@ def predict_sentiment_indobert(cleaned_text: str):
 
 
 # =========================================================
-# 8) UI
+# 8) NET REPUTABLE SCORE
 # =========================================================
-st.title("Aplikasi Analisis Sentimen dan Topik Ulasan Pengguna")
-st.write("Masukkan ulasan pengguna aplikasi Polri Presisi untuk menganalisis topik dan sentimennya.")
+def sentiment_to_score(label: str) -> int:
+    """
+    +1 positive, 0 neutral, -1 negative
+    """
+    if not label:
+        return 0
+    low = str(label).lower()
+    if "pos" in low:
+        return 1
+    if "neg" in low:
+        return -1
+    return 0
 
-user_input = st.text_area("Masukkan ulasan Anda di sini:", "")
 
-if st.button("Analisis Ulasan"):
-    if not user_input.strip():
-        st.warning("Silakan masukkan ulasan terlebih dahulu.")
-        st.stop()
+# =========================================================
+# 9) ANALYZE SINGLE TEXT (untuk input teks & batch file)
+# =========================================================
+def analyze_review(review: str, use_indobert: bool = True) -> dict:
+    review = "" if review is None else str(review)
 
-    lda_ready_text = preprocess_single_text(user_input)
-    indobert_ready_text = preprocess_text(user_input)
+    lda_ready = preprocess_single_text(review)   # untuk LDA/LSTM
+    indobert_ready = preprocess_text(review)     # untuk IndoBERT
 
-    st.subheader("Hasil Analisis:")
+    lda_topic = None
+    lstm_topic = None
+    lstm_sent = None
+    indobert_sent = None
+    notes = ""
 
-    # Topic & LSTM sentiment
-    if not lda_ready_text.strip():
-        st.warning("Ulasan setelah preprocessing menjadi kosong. Tidak dapat menganalisis topik dan LSTM sentimen.")
+    # LDA + LSTM
+    if lda_ready.strip():
+        _, lda_topic = predict_topic_lda(lda_ready)
+        _, lstm_topic = predict_topic_lstm(lda_ready)
+        lstm_sent = predict_sentiment_lstm(lda_ready)
     else:
-        lda_topic_id, lda_topic_name = predict_topic_lda(lda_ready_text)
-        st.write(f"**LDA Topik:** {lda_topic_name} (ID: {lda_topic_id})")
-
-        lstm_topic_id, lstm_topic_name = predict_topic_lstm(lda_ready_text)
-        st.write(f"**LSTM Topik:** {lstm_topic_name} (ID: {lstm_topic_id})")
-
-        lstm_sent = predict_sentiment_lstm(lda_ready_text)
-        st.write(f"**LSTM Sentimen:** {lstm_sent}")
+        notes += "Preprocess LDA/LSTM kosong. "
 
     # IndoBERT
-    if not indobert_ready_text.strip():
-        st.warning("Ulasan setelah preprocessing untuk IndoBERT menjadi kosong. Tidak dapat menganalisis sentimen dengan IndoBERT.")
-    else:
-        if indobert_sentiment_pipeline_loaded is None:
-            st.info("IndoBERT (Hugging Face) tidak tersedia. Menampilkan hasil LSTM saja.")
+    if use_indobert:
+        if indobert_ready.strip():
+            if indobert_sentiment_pipeline_loaded is None:
+                notes += "IndoBERT tidak tersedia. "
+            else:
+                indobert_sent = predict_sentiment_indobert(indobert_ready)
         else:
-            indobert_sent = predict_sentiment_indobert(indobert_ready_text)
-            st.write(f"**IndoBERT Sentimen:** {indobert_sent}")
+            notes += "Preprocess IndoBERT kosong. "
+    else:
+        notes += "IndoBERT dimatikan oleh user. "
+
+    # Net Reputable Score:
+    # pakai IndoBERT jika ada, fallback ke LSTM sentiment
+    base_sent = indobert_sent if indobert_sent is not None else lstm_sent
+    net_score = sentiment_to_score(base_sent)
+
+    return {
+        "Topik LDA": lda_topic,
+        "Sentimen IndoBERT": indobert_sent,
+        "Net Reputable Score": net_score,
+        "Topik LSTM": lstm_topic,
+        "Sentimen LSTM": lstm_sent,
+        "Notes": notes.strip(),
+    }
+
+
+# =========================================================
+# 10) UI
+# =========================================================
+st.title("Aplikasi Analisis Sentimen dan Topik Ulasan Pengguna")
+st.write("Hasil yang ditampilkan: **Topik LDA**, **Sentimen IndoBERT**, **Net Reputable Score**, dan **hasil model LSTM**.")
+
+mode = st.radio("Pilih metode input:", ["Input Teks", "Upload File (CSV/Excel)"], horizontal=True)
+
+# ---------- Mode 1: Input Teks ----------
+if mode == "Input Teks":
+    text = st.text_area("Masukkan ulasan Anda di sini:", "")
+    use_indobert = st.checkbox("Gunakan IndoBERT (butuh transformers+torch & akses model)", value=True)
+
+    if st.button("Analisis"):
+        if not text.strip():
+            st.warning("Silakan masukkan ulasan terlebih dahulu.")
+        else:
+            out = analyze_review(text, use_indobert=use_indobert)
+
+            st.subheader("Hasil")
+            st.write(f"**Topik LDA:** {out['Topik LDA']}")
+            st.write(f"**Sentimen IndoBERT:** {out['Sentimen IndoBERT']}")
+            st.write(f"**Net Reputable Score:** {out['Net Reputable Score']}")
+            st.write(f"**Topik LSTM:** {out['Topik LSTM']}")
+            st.write(f"**Sentimen LSTM:** {out['Sentimen LSTM']}")
+
+            if out["Notes"]:
+                st.caption(f"Catatan: {out['Notes']}")
+
+# ---------- Mode 2: Upload File ----------
+else:
+    st.subheader("Upload CSV / Excel untuk Analisis Batch")
+
+    uploaded = st.file_uploader("Upload file", type=["csv", "xlsx"])
+    if uploaded:
+        # Load file
+        if uploaded.name.lower().endswith(".csv"):
+            df = pd.read_csv(uploaded)
+        else:
+            xls = pd.ExcelFile(uploaded)
+            sheet = st.selectbox("Pilih sheet:", xls.sheet_names)
+            df = pd.read_excel(uploaded, sheet_name=sheet)
+
+        st.write("Preview:")
+        st.dataframe(df.head())
+
+        # pilih kolom ulasan
+        col = st.selectbox("Pilih kolom yang berisi ulasan:", df.columns)
+
+        # kontrol performa
+        max_rows = st.number_input(
+            "Maksimal baris dianalisis (hindari timeout):",
+            min_value=1,
+            max_value=len(df),
+            value=min(500, len(df)),
+        )
+
+        use_indobert = st.checkbox("Gunakan IndoBERT (lebih berat)", value=False)
+
+        if st.button("Jalankan Analisis Batch"):
+            work = df.copy().head(int(max_rows))
+            work[col] = work[col].fillna("").astype(str)
+
+            results = []
+            with st.spinner("Menganalisis..."):
+                for review in work[col].tolist():
+                    results.append(analyze_review(review, use_indobert=use_indobert))
+
+            res_df = pd.DataFrame(results)
+            out_df = work.reset_index(drop=True).copy()
+
+            # kolom output sesuai permintaan
+            out_df["Topik LDA"] = res_df["Topik LDA"]
+            out_df["Sentimen IndoBERT"] = res_df["Sentimen IndoBERT"]
+            out_df["Net Reputable Score"] = res_df["Net Reputable Score"]
+            out_df["Topik LSTM"] = res_df["Topik LSTM"]
+            out_df["Sentimen LSTM"] = res_df["Sentimen LSTM"]
+            out_df["Notes"] = res_df["Notes"]
+
+            # ringkasan global reputasi
+            total = len(out_df)
+            pos = int((out_df["Net Reputable Score"] == 1).sum())
+            neg = int((out_df["Net Reputable Score"] == -1).sum())
+            neu = int((out_df["Net Reputable Score"] == 0).sum())
+            net_percent = ((pos - neg) / total * 100) if total else 0.0
+
+            st.subheader("Ringkasan")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total", total)
+            c2.metric("Positif", pos)
+            c3.metric("Netral", neu)
+            c4.metric("Negatif", neg)
+            st.write(f"**Net Reputable Score (global)** = (Positif - Negatif) / Total × 100 = **{net_percent:.2f}%**")
+
+            st.subheader("Hasil (preview)")
+            st.dataframe(out_df.head(30))
+
+            # download CSV hasil
+            csv_bytes = out_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download Hasil (CSV)",
+                data=csv_bytes,
+                file_name="hasil_analisis.csv",
+                mime="text/csv",
+            )
