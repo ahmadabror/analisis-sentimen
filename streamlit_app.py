@@ -1,12 +1,3 @@
-# =========================
-# streamlit_app.py (PARIPURNA UI COMPACT, TANPA CSS)
-# Output:
-# 1) LDA Topik + Koherensi (saved atau approx dari upload)
-# 2) IndoBERT Sentimen per ulasan
-# 3) NRS per Topik (ranking)
-# 4) LSTM hanya untuk evaluasi: confusion matrix + accuracy topik & sentimen
-# =========================
-
 import os
 import re
 import json
@@ -411,6 +402,7 @@ st.title("Dashboard Analisis: LDA + IndoBERT + NRS (Per Topik) & Evaluasi LSTM")
 st.caption(
     "Tab Upload: Topik LDA, Sentimen IndoBERT, Koherensi, Ranking NRS per topik. "
     "Tab Evaluasi: Confusion Matrix & Akurasi LSTM."
+    "Ahmad Abror 2043221003."
 )
 
 tab_upload, tab_eval, tab_diag = st.tabs(["📄 Upload & Output", "🧪 Evaluasi LSTM", "🛠 Diagnostik"])
