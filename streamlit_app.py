@@ -1,11 +1,16 @@
+# =========================
+# streamlit_app.py (FINAL)
+# =========================
+
 import os
-import pickle
 import re
+import pickle
 
 import numpy as np
 import streamlit as st
 import emoji
 import nltk
+
 import gensim
 from gensim import corpora
 
@@ -15,43 +20,64 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 
+
 # =========================================================
-# 0) ENV FIXES (HARUS SEBELUM IMPORT TRANSFORMERS)
+# 0) ENV (harus di atas import transformers)
 # =========================================================
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-os.environ["TRANSFORMERS_NO_TF"] = "1"     # <-- kunci: cegah transformers pakai TF/Keras 3
-os.environ["HF_HOME"] = "/tmp/hf"          # cache HF di folder writable
 
-# Import transformers pipeline dengan aman (jangan bikin app crash)
+# Kunci untuk menghindari error Keras 3 pada Transformers:
+# - Jangan izinkan Transformers menggunakan TensorFlow
+os.environ["TRANSFORMERS_NO_TF"] = "1"
+
+# Cache HuggingFace di folder writable Streamlit Cloud
+os.environ["HF_HOME"] = "/tmp/hf"
+os.makedirs("/tmp/hf", exist_ok=True)
+
+# Import transformers pipeline secara aman (kalau gagal, app tetap hidup)
 try:
     from transformers import pipeline
-except Exception:
+except Exception as e:
     pipeline = None
+    TRANSFORMERS_IMPORT_ERROR = str(e)
+else:
+    TRANSFORMERS_IMPORT_ERROR = ""
 
 
 # =========================================================
-# 1) NLTK SETUP (Streamlit Cloud safe)
+# 1) NLTK (Streamlit Cloud safe): download punkt + punkt_tab
 # =========================================================
 NLTK_DIR = "/tmp/nltk_data"
 os.makedirs(NLTK_DIR, exist_ok=True)
 if NLTK_DIR not in nltk.data.path:
     nltk.data.path.append(NLTK_DIR)
 
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt", download_dir=NLTK_DIR, quiet=True, raise_on_error=False)
+def ensure_nltk():
+    # NLTK 3.9.x sering butuh punkt_tab juga
     try:
         nltk.data.find("tokenizers/punkt")
+        nltk.data.find("tokenizers/punkt_tab/english")
+        return
+    except LookupError:
+        pass
+
+    nltk.download("punkt", download_dir=NLTK_DIR, quiet=True, raise_on_error=False)
+    nltk.download("punkt_tab", download_dir=NLTK_DIR, quiet=True, raise_on_error=False)
+
+    try:
+        nltk.data.find("tokenizers/punkt")
+        nltk.data.find("tokenizers/punkt_tab/english")
     except LookupError as e:
         st.error(
-            "NLTK resource 'punkt' belum tersedia dan gagal diunduh pada environment deploy.\n\n"
+            "NLTK tokenizer belum tersedia dan gagal diunduh pada environment deploy.\n\n"
             "Solusi:\n"
             "- Redeploy\n"
-            "- Pastikan environment mengizinkan download\n\n"
+            "- Pastikan environment mengizinkan download NLTK\n\n"
             f"Detail: {e}"
         )
         st.stop()
+
+ensure_nltk()
 
 
 # =========================================================
@@ -82,30 +108,30 @@ stemmer = StemmerFactory().create_stemmer()
 normalization_dict = {
     "ae": "saja", "aja": "saja", "ajah": "saja", "aj": "saja", "jha": "saja", "sj": "saja",
     "g": "tidak", "ga": "tidak", "gak": "tidak", "gk": "tidak", "kaga": "tidak", "kagak": "tidak",
-    "kg": "tidak", "ngga": "tidak", "Nggak": "tidak", "tdk": "tidak", "tak": "tidak",
+    "kg": "tidak", "ngga": "tidak", "nggak": "tidak", "tdk": "tidak", "tak": "tidak",
     "lgi": "lagi", "lg": "lagi", "donlod": "download", "pdhl": "padahal", "pdhal": "padahal",
-    "Coba2": "coba-coba", "tpi": "tapi", "tp": "tapi", "betmanfaat": "bermanfaat",
+    "tpi": "tapi", "tp": "tapi",
     "gliran": "giliran", "kl": "kalau", "klo": "kalau", "gatau": "tidak tau", "bgt": "banget",
     "hrs": "harus", "dll": "dan lain-lain", "dsb": "dan sebagainya", "trs": "terus", "trus": "terus",
     "sangan": "sangat", "bs": "bisa", "bsa": "bisa", "gabisa": "tidak bisa", "gbsa": "tidak bisa",
     "gada": "tidak ada", "gaada": "tidak ada", "gausah": "tidak usah", "bkn": "bukan",
-    "udh": "sudah", "udah": "sudah", "sdh": "sudah", "pertngahn": "pertengahan",
+    "udh": "sudah", "udah": "sudah", "sdh": "sudah",
     "ribet": "ruwet", "ribed": "ruwet", "sdangkan": "sedangkan", "lemot": "lambat",
-    "lag": "lambat", "ngelag": "gangguan", "yg": "yang", "dipakek": "di pakai", "pake": "pakai",
+    "ngelag": "gangguan", "yg": "yang", "dipakek": "di pakai", "pake": "pakai",
     "kya": "seperti", "kyk": "seperti", "ngurus": "mengurus", "jls": "jelas",
     "burik": "buruk", "payah": "buruk", "krna": "karena", "dr": "dari", "smpe": "sampai",
     "slalu": "selalu", "mulu": "melulu", "d": "di", "konek": "terhubung", "suruh": "disuruh",
     "apk": "aplikasi", "app": "aplikasi", "apps": "aplikasi", "apl": "aplikasi",
-    "bapuk": "jelek", "bukak": "buka", "nyolong": "mencuri", "pas": "ketika",
+    "bapuk": "jelek", "bukak": "buka",
     "uodate": "update", "ato": "atau", "onlen": "online", "cmn": "cuman", "jele": "jelek",
-    "angel": "susah", "jg": "juga", "knp": "kenapa", "hbis": "setelah", "tololl": "tolol", "ny": "nya",
+    "angel": "susah", "jg": "juga", "knp": "kenapa", "hbis": "setelah", "ny": "nya",
     "skck": "skck", "stnk": "stnk", "sim": "sim", "sp2hp": "sp2hp", "propam": "propam", "dumas": "dumas",
     "tilang": "tilang", "e-tilang": "tilang", "etilang": "tilang", "surat kehilangan": "kehilangan",
 }
 
 
 # =========================================================
-# 4) PREPROCESSING (FIX re.sub BUG)
+# 4) PREPROCESSING (FIX UTAMA re.sub)
 # =========================================================
 def normalize_repeated_characters(text: str) -> str:
     return re.sub(r"(.)\1{2,}", r"\1", text)
@@ -122,10 +148,11 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r"[^\w\s]+", " ", text)
 
     text = text.lower()
+
     for slang, standard in normalization_dict.items():
         text = re.sub(rf"\b{re.escape(slang.lower())}\b", standard.lower(), text)
 
-    # FIX UTAMA: re.sub harus ada argumen string (text)
+    # ✅ FIX: harus ada argumen ke-3 (string)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -152,7 +179,7 @@ topic_name_map_lda = {
 
 
 # =========================================================
-# 6) LOAD MODELS (AMAN: bisa disable per komponen)
+# 6) LOAD MODELS (robust)
 # =========================================================
 maxlen = 20
 maxlen_sentiment = 20
@@ -165,13 +192,15 @@ def load_all_models():
     # ---------- LDA ----------
     lda_model = None
     dictionary = None
-    # gensim LDA sering butuh file .npy pendamping; kalau tidak lengkap, matikan saja
-    must_have = [
+
+    # Gensim LDA bisa butuh file pendamping .npy
+    lda_files_must = [
         "lda_model.gensim",
-        "lda_model.gensim.expElogbeta.npy",  # sering jadi penyebab missing
+        "lda_model.gensim.expElogbeta.npy",
         "lda_dictionary.gensim",
     ]
-    if _exists_all(must_have):
+
+    if _exists_all(lda_files_must):
         try:
             lda_model = gensim.models.LdaMulticore.load("lda_model.gensim")
             dictionary = corpora.Dictionary.load("lda_dictionary.gensim")
@@ -182,26 +211,29 @@ def load_all_models():
     else:
         st.warning(
             "File LDA tidak lengkap. Fitur LDA dimatikan.\n"
-            f"Pastikan file berikut ada di repo: {', '.join(must_have)}"
+            "Pastikan file berikut ada di repo:\n- " + "\n- ".join(lda_files_must)
         )
 
-    # ---------- IndoBERT (Hugging Face) ----------
-    indobert_sentiment_pipeline = None
+    # ---------- IndoBERT Hugging Face (PyTorch only) ----------
+    indobert_pipe = None
     HF_MODEL_ID = "mdhugol/indonesia-bert-sentiment-classification"
 
     if pipeline is None:
-        st.warning("Transformers/pipeline gagal di-import. IndoBERT dimatikan.")
+        st.warning(
+            "Transformers/pipeline gagal di-import. IndoBERT dimatikan.\n"
+            f"Detail import error: {TRANSFORMERS_IMPORT_ERROR}"
+        )
     else:
         try:
-            indobert_sentiment_pipeline = pipeline(
+            indobert_pipe = pipeline(
                 "sentiment-analysis",
                 model=HF_MODEL_ID,
                 tokenizer=HF_MODEL_ID,
-                framework="pt",     # paksa PyTorch, hindari TF/Keras 3
-                device=-1,          # CPU
+                framework="pt",
+                device=-1,
             )
         except Exception as e:
-            indobert_sentiment_pipeline = None
+            indobert_pipe = None
             st.warning(f"Gagal load IndoBERT dari Hugging Face. IndoBERT dimatikan. Detail: {e}")
 
     # ---------- LSTM Topic ----------
@@ -220,7 +252,7 @@ def load_all_models():
 
     return (
         lda_model, dictionary,
-        indobert_sentiment_pipeline,
+        indobert_pipe,
         lstm_topic_model, tokenizer_topic, label_encoder_topic,
         lstm_sentiment_model, tokenizer_sentiment, label_encoder_sentiment,
     )
@@ -277,6 +309,7 @@ def predict_sentiment_indobert(cleaned_text: str):
 
     out = indobert_sentiment_pipeline_loaded(cleaned_text)[0]
     label = out.get("label", "")
+
     mapping = {"LABEL_0": "positive", "LABEL_1": "neutral", "LABEL_2": "negative"}
     if label in mapping:
         return mapping[label]
@@ -307,6 +340,7 @@ if st.button("Analisis Ulasan"):
 
     st.subheader("Hasil Analisis:")
 
+    # Topic & LSTM sentiment
     if not lda_ready_text.strip():
         st.warning("Ulasan setelah preprocessing menjadi kosong. Tidak dapat menganalisis topik dan LSTM sentimen.")
     else:
@@ -319,6 +353,7 @@ if st.button("Analisis Ulasan"):
         lstm_sent = predict_sentiment_lstm(lda_ready_text)
         st.write(f"**LSTM Sentimen:** {lstm_sent}")
 
+    # IndoBERT
     if not indobert_ready_text.strip():
         st.warning("Ulasan setelah preprocessing untuk IndoBERT menjadi kosong. Tidak dapat menganalisis sentimen dengan IndoBERT.")
     else:
