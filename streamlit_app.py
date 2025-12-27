@@ -328,172 +328,109 @@ def analyze_one(review: str, res: Dict, use_indobert: bool) -> Dict:
 # =========================================================
 # 7) UI FULL
 # =========================================================
-st.set_page_config(page_title="Analisis Sentimen & Topik", layout="wide")
+tab_out, tab_eval = st.tabs(["📊 Output Analisis (LDA+IndoBERT+NRS)", "🧪 Evaluasi LSTM"])
 
-st.title("Aplikasi Analisis Sentimen dan Topik Ulasan Pengguna")
-st.write("Output: **Topik LDA**, **Sentimen IndoBERT**, **Net Reputable Score**, dan **hasil model LSTM (Topik+Sentimen)**.")
+with tab_out:
+    st.subheader("Output Analisis")
 
-tab1, tab2, tab3 = st.tabs(["📝 Input Teks", "📄 Upload CSV/Excel", "🛠 Diagnostik"])
+    # jalankan pred per baris: Topik LDA + Sentimen IndoBERT
+    results = []
+    with st.spinner("Menganalisis baris..."):
+        for review in work[text_col].tolist():
+            out = analyze_one(review, res, use_indobert=use_indobert_file)  # dari versi kamu
+            # pastikan kolom yang dipakai:
+            # out["Topik LDA"], out["Sentimen IndoBERT"]
+            # hitung score baris dari IndoBERT
+            base_sent = out["Sentimen IndoBERT"] if out["Sentimen IndoBERT"] is not None else "neutral"
+            out["Score"] = sentiment_to_score(base_sent)
+            results.append(out)
 
-with tab3:
-    st.subheader("Diagnostik cepat (biar UI tidak blank)")
-    st.write("Cek apakah file model ada di repo dan apakah Transformers bisa diimport.")
+    res_df = pd.DataFrame(results)
+    out_df = work.reset_index(drop=True).copy()
+    out_df["Topik LDA"] = res_df["Topik LDA"]
+    out_df["Sentimen IndoBERT"] = res_df["Sentimen IndoBERT"].fillna("neutral")
+    out_df["Score"] = res_df["Score"]
 
-    required_files = [
-        "lstm_topic_model.h5",
-        "tokenizer_topic.pkl",
-        "label_encoder_topic.pkl",
-        "lstm_sentiment_model.h5",
-        "tokenizer_sentiment.pkl",
-        "label_encoder_sentiment.pkl",
-    ]
-    optional_files = [
-        "stopwordbahasa.txt",
-        "lda_model.gensim",
-        "lda_model.gensim.expElogbeta.npy",
-        "lda_dictionary.gensim",
-    ]
+    st.write("Preview hasil per ulasan:")
+    st.dataframe(out_df.head(30))
 
-    st.markdown("### File Wajib")
-    for f in required_files:
-        st.write(("✅" if os.path.exists(f) else "❌"), f)
+    # NRS per topik + ranking
+    st.subheader("NRS per Topik (Ranking)")
+    topic_nrs = build_topic_nrs_table(out_df, topic_col="Topik LDA", sent_col="Sentimen IndoBERT")
+    st.dataframe(topic_nrs)
 
-    st.markdown("### File Opsional")
-    for f in optional_files:
-        st.write(("✅" if os.path.exists(f) else "⚠️"), f)
-
-    st.markdown("### Transformers Import")
-    if pipeline is None:
-        st.error("pipeline tidak bisa diimport.")
-        st.code(TRANSFORMERS_IMPORT_ERROR)
-        st.info("Cek juga apakah ada file bernama transformers.py / folder transformers/ di repo (harus di-rename).")
+    # tampilkan koherensi LDA
+    st.subheader("Koherensi LDA")
+    saved = load_saved_lda_coherence()
+    if saved is not None:
+        st.success("Koherensi dibaca dari lda_coherence.json (recommended).")
+        st.write(saved)
     else:
-        st.success("Transformers pipeline import OK.")
+        # coba approx coherence dari sample upload (tokenized)
+        stop_words = res["stop_words"]
+        texts_tokens = []
+        for t in work[text_col].fillna("").astype(str).tolist()[:200]:
+            cleaned = preprocess_text(t)
+            tokens = nltk.tokenize.word_tokenize(stemmer.stem(cleaned))
+            tokens = [x for x in tokens if x not in stop_words and len(x) > 2]
+            if tokens:
+                texts_tokens.append(tokens)
 
-    ok, msg = ensure_nltk()
-    st.markdown("### NLTK")
-    if ok:
-        st.success("NLTK punkt + punkt_tab OK.")
-    else:
-        st.error("NLTK belum siap.")
-        st.code(msg)
-
-
-with tab1:
-    st.subheader("Input Teks")
-    colA, colB = st.columns([2, 1], gap="large")
-
-    with colA:
-        text = st.text_area("Masukkan ulasan:", height=180)
-
-    with colB:
-        use_indobert = st.checkbox("Gunakan IndoBERT (lebih berat)", value=True)
-        st.caption("Kalau IndoBERT gagal, sistem otomatis fallback ke LSTM untuk skor reputasi.")
-        run = st.button("Analisis", use_container_width=True)
-
-    if run:
-        if not text.strip():
-            st.warning("Silakan masukkan ulasan terlebih dahulu.")
+        coh = compute_lda_coherence_from_texts(res["lda_model"], res["dictionary"], texts_tokens)
+        if coh is None:
+            st.warning("Koherensi tidak bisa dihitung (butuh data lebih banyak atau model/dictionary tidak tersedia).")
         else:
-            with st.spinner("Loading resources & menganalisis..."):
-                try:
-                    res = get_resources(load_indobert=use_indobert)
-                except Exception as e:
-                    st.error(f"Gagal load resources: {e}")
-                    st.stop()
+            st.write(f"**Coherence (c_v, approx dari sample upload): {coh:.4f}**")
 
-                out = analyze_one(text, res, use_indobert=use_indobert)
+    # download hasil per ulasan
+    csv_bytes = out_df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Hasil Per Ulasan (CSV)", data=csv_bytes, file_name="hasil_ulasan.csv", mime="text/csv")
 
-            st.markdown("### Hasil")
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Topik LDA", out["Topik LDA"])
-            c2.metric("Sentimen IndoBERT", str(out["Sentimen IndoBERT"]))
-            c3.metric("Net Reputable Score", out["Net Reputable Score"])
-            c4.metric("Topik LSTM", out["Topik LSTM"])
-            c5.metric("Sentimen LSTM", out["Sentimen LSTM"])
-
-            if out["Notes"]:
-                st.info(out["Notes"])
+    # download ranking NRS per topik
+    csv2 = topic_nrs.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Ranking NRS per Topik (CSV)", data=csv2, file_name="ranking_nrs_topik.csv", mime="text/csv")
 
 
-with tab2:
-    st.subheader("Upload CSV / Excel (Batch)")
+with tab_eval:
+    st.subheader("Evaluasi LSTM (Confusion Matrix & Accuracy)")
+    st.info("Agar evaluasi berjalan, file harus punya kolom ground-truth: label_topik dan label_sentimen (atau pilih kolomnya di bawah).")
 
-    left, right = st.columns([2, 1], gap="large")
-    with right:
-        use_indobert_file = st.checkbox("Gunakan IndoBERT", value=False)
-        max_rows = st.number_input("Maks baris (hindari timeout)", 1, 1000000, 500)
+    # pilih kolom label
+    true_topic_col = st.selectbox("Pilih kolom label topik (ground truth):", df.columns)
+    true_sent_col = st.selectbox("Pilih kolom label sentimen (ground truth):", df.columns)
 
-    with left:
-        uploaded = st.file_uploader("Upload file CSV atau Excel", type=["csv", "xlsx"])
-
-    if uploaded:
-        # Load dataframe
-        if uploaded.name.lower().endswith(".csv"):
-            df = pd.read_csv(uploaded)
+    if st.button("Jalankan Evaluasi LSTM"):
+        eval_df = work.copy()
+        # buang baris yang labelnya kosong
+        eval_df = eval_df.dropna(subset=[true_topic_col, true_sent_col])
+        if len(eval_df) == 0:
+            st.error("Tidak ada data evaluasi (label kosong semua).")
         else:
-            xls = pd.ExcelFile(uploaded)
-            sheet = st.selectbox("Pilih sheet:", xls.sheet_names)
-            df = pd.read_excel(uploaded, sheet_name=sheet)
+            with st.spinner("Menghitung evaluasi LSTM..."):
+                ev = evaluate_lstm(eval_df, text_col, true_topic_col, true_sent_col, res)
 
-        st.write("Preview data:")
-        st.dataframe(df.head())
+            c1, c2 = st.columns(2)
+            c1.metric("Akurasi Topik (LSTM)", f"{ev['acc_topic']:.4f}")
+            c2.metric("Akurasi Sentimen (LSTM)", f"{ev['acc_sent']:.4f}")
 
-        text_col = st.selectbox("Pilih kolom ulasan:", df.columns)
+            st.markdown("### Confusion Matrix - Topik")
+            cm_topic_df = pd.DataFrame(ev["cm_topic"], index=ev["topic_labels"], columns=ev["topic_labels"])
+            st.dataframe(cm_topic_df)
 
-        run_file = st.button("Jalankan Analisis Batch", type="primary")
-        if run_file:
-            work = df.copy().head(int(max_rows))
-            work[text_col] = work[text_col].fillna("").astype(str)
+            st.markdown("### Confusion Matrix - Sentimen")
+            cm_sent_df = pd.DataFrame(ev["cm_sent"], index=ev["sent_labels"], columns=ev["sent_labels"])
+            st.dataframe(cm_sent_df)
 
-            with st.spinner("Loading resources..."):
-                try:
-                    res = get_resources(load_indobert=use_indobert_file)
-                except Exception as e:
-                    st.error(f"Gagal load resources: {e}")
-                    st.stop()
-
-            results = []
-            with st.spinner("Menganalisis baris..."):
-                for review in work[text_col].tolist():
-                    results.append(analyze_one(review, res, use_indobert=use_indobert_file))
-
-            res_df = pd.DataFrame(results)
-            out_df = work.reset_index(drop=True).copy()
-
-            # Kolom output sesuai permintaan
-            out_df["Topik LDA"] = res_df["Topik LDA"]
-            out_df["Sentimen IndoBERT"] = res_df["Sentimen IndoBERT"]
-            out_df["Net Reputable Score"] = res_df["Net Reputable Score"]
-            out_df["Topik LSTM"] = res_df["Topik LSTM"]
-            out_df["Sentimen LSTM"] = res_df["Sentimen LSTM"]
-
-            # optional: notes untuk debug
-            out_df["Notes"] = res_df["Notes"]
-
-            # Ringkasan reputasi global
-            total = len(out_df)
-            pos = int((out_df["Net Reputable Score"] == 1).sum())
-            neg = int((out_df["Net Reputable Score"] == -1).sum())
-            neu = int((out_df["Net Reputable Score"] == 0).sum())
-            net_percent = ((pos - neg) / total * 100) if total else 0.0
-
-            st.markdown("### Ringkasan")
-            a, b, c, d = st.columns(4)
-            a.metric("Total", total)
-            b.metric("Positif", pos)
-            c.metric("Netral", neu)
-            d.metric("Negatif", neg)
-            st.write(f"**Net Reputable Score (global)** = (Positif - Negatif) / Total × 100 = **{net_percent:.2f}%**")
-
-            st.markdown("### Hasil (preview)")
-            st.dataframe(out_df.head(30))
-
-            # Download CSV
-            csv_bytes = out_df.to_csv(index=False).encode("utf-8")
+            # download evaluasi
             st.download_button(
-                "Download Hasil (CSV)",
-                data=csv_bytes,
-                file_name="hasil_analisis.csv",
+                "Download Confusion Matrix Topik (CSV)",
+                data=cm_topic_df.to_csv().encode("utf-8"),
+                file_name="cm_topik.csv",
+                mime="text/csv",
+            )
+            st.download_button(
+                "Download Confusion Matrix Sentimen (CSV)",
+                data=cm_sent_df.to_csv().encode("utf-8"),
+                file_name="cm_sentimen.csv",
                 mime="text/csv",
             )
