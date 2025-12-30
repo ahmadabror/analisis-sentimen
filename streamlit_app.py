@@ -452,96 +452,216 @@ with tab_diag:
 
 
 with tab_upload:
-    st.subheader("Upload Data (CSV/Excel) → Output LDA + IndoBERT + NRS per Topik")
+    st.subheader("Upload Data (CSV/Excel) → Output LDA + IndoBERT + NRS per Topik / atau Ketik Langsung")
 
-    left, right = st.columns([2, 1], gap="large")
-    with right:
-        use_indobert = st.checkbox("Gunakan IndoBERT", value=True)
-        max_rows = st.number_input("Maks baris (hindari timeout)", 1, 1000000, 500)
-    with left:
-        uploaded = st.file_uploader("Upload file CSV atau Excel", type=["csv", "xlsx"])
+    # pilih sumber input
+    input_mode = st.radio(
+        "Sumber input:",
+        ["Upload file", "Ketik langsung"],
+        horizontal=True
+    )
 
-    if uploaded:
-        # Load
-        if uploaded.name.lower().endswith(".csv"):
-            df = pd.read_csv(uploaded)
-        else:
-            xls = pd.ExcelFile(uploaded)
-            sheet = st.selectbox("Pilih sheet:", xls.sheet_names)
-            df = pd.read_excel(uploaded, sheet_name=sheet)
-
-        st.caption("Preview data")
-        st.dataframe(df.head(10), use_container_width=True, hide_index=True)
-
-        text_col = st.selectbox("Pilih kolom teks ulasan:", df.columns)
-
-        if st.button("Generate Output", type="primary"):
-            work = df.copy().head(int(max_rows))
-            work[text_col] = work[text_col].fillna("").astype(str)
-
-            with st.spinner("Loading resources..."):
-                res = get_resources(load_indobert=use_indobert)
-
-            out_rows = []
-            token_texts = []
-            sw = res["stop_words"]
-
-            with st.spinner("Memproses baris..."):
-                for review in work[text_col].tolist():
-                    cleaned = preprocess_text(review)
-                    text_lda = preprocess_text_lda(cleaned, sw)
-
-                    topik_lda = lda_topic_from_text(text_lda, res["lda_model"], res["dictionary"])
-                    sent_ib = indobert_sentiment(cleaned, res["indobert_pipe"]) if use_indobert else None
-                    if sent_ib is None:
-                        sent_ib = "neutral"
-
-                    toks = tokenize_for_coherence(cleaned, sw)
-                    if toks:
-                        token_texts.append(toks)
-
-                    out_rows.append({
-                        "Ulasan": review,
-                        "Topik LDA": topik_lda,
-                        "Sentimen IndoBERT": sent_ib,
-                    })
-
-            out_df = pd.DataFrame(out_rows)
-
-            # NRS per baris (score)
-            out_df["Score"] = out_df["Sentimen IndoBERT"].apply(
-                lambda s: 1 if "pos" in str(s).lower() else (-1 if "neg" in str(s).lower() else 0)
+    # =========================
+    # MODE 1: KETIK LANGSUNG
+    # =========================
+    if input_mode == "Ketik langsung":
+        colL, colR = st.columns([2, 1], gap="large")
+        with colR:
+            use_indobert = st.checkbox("Gunakan IndoBERT", value=True, key="ib_manual")
+        with colL:
+            user_text = st.text_area(
+                "Masukkan teks ulasan:",
+                height=170,
+                placeholder="Tulis ulasan di sini..."
             )
 
-            st.divider()
-
-            # ---- COHERENCE ----
-            st.subheader("Koherensi LDA")
-            saved = load_saved_lda_coherence()
-            if saved is not None:
-                st.caption("Koherensi dibaca dari file lda_coherence.json (recommended).")
-                st.json(saved)
+        if st.button("Analisa Teks", type="primary", key="run_manual"):
+            if not str(user_text).strip():
+                st.warning("Teks masih kosong.")
             else:
-                coh = compute_lda_coherence_from_tokens(res["lda_model"], res["dictionary"], token_texts[:200])
-                if coh is None:
-                    st.warning("Koherensi tidak bisa dihitung (model/dictionary tidak tersedia atau token kurang).")
-                    st.caption("Saran: simpan koherensi dari notebook training ke lda_coherence.json.")
+                with st.spinner("Loading resources..."):
+                    res = get_resources(load_indobert=use_indobert)
+
+                # preprocess & prediksi
+                cleaned = preprocess_text(user_text)
+                text_lda = preprocess_text_lda(cleaned, res["stop_words"])
+
+                topik_lda = lda_topic_from_text(text_lda, res["lda_model"], res["dictionary"])
+                sent_ib = indobert_sentiment(cleaned, res["indobert_pipe"]) if use_indobert else None
+                if sent_ib is None:
+                    sent_ib = "neutral"
+
+                # LSTM (topik + sentiment)
+                pred_topic_lbl, pred_sent_lbl = lstm_predict_topic_sent([user_text], res)
+
+                score = 1 if "pos" in str(sent_ib).lower() else (-1 if "neg" in str(sent_ib).lower() else 0)
+                nrs_value = f"{score} (per ulasan)"
+
+                render_result_compact(
+                    topik_lda=topik_lda,
+                    sent_ib=sent_ib,
+                    nrs_value=nrs_value,
+                    notes=f"Topik LSTM: {pred_topic_lbl[0]}\nSentimen LSTM: {pred_sent_lbl[0]}"
+                )
+
+                # tampilkan juga dalam tabel 1 baris biar enak
+                st.divider()
+                st.subheader("Detail (1 baris)")
+                one = pd.DataFrame([{
+                    "Ulasan": user_text,
+                    "Topik LDA": topik_lda,
+                    "Sentimen IndoBERT": sent_ib,
+                    "Score": score,
+                    "Topik LSTM": pred_topic_lbl[0],
+                    "Sentimen LSTM": pred_sent_lbl[0],
+                }])
+                st.dataframe(one, use_container_width=True, hide_index=True)
+
+    # =========================
+    # MODE 2: UPLOAD FILE
+    # =========================
+    if input_mode == "Upload file":
+        left, right = st.columns([2, 1], gap="large")
+        with right:
+            use_indobert = st.checkbox("Gunakan IndoBERT", value=True, key="ib_upload")
+            max_rows = st.number_input("Maks baris (hindari timeout)", 1, 1000000, 500, key="max_rows_upload")
+            show_lstm_pred = st.checkbox("Tampilkan prediksi LSTM di output", value=True, key="show_lstm_upload")
+        with left:
+            uploaded = st.file_uploader("Upload file CSV atau Excel", type=["csv", "xlsx"], key="uploader_main")
+
+        if uploaded:
+            # Load
+            if uploaded.name.lower().endswith(".csv"):
+                df = pd.read_csv(uploaded)
+            else:
+                xls = pd.ExcelFile(uploaded)
+                sheet = st.selectbox("Pilih sheet:", xls.sheet_names, key="sheet_main")
+                df = pd.read_excel(uploaded, sheet_name=sheet)
+
+            st.caption("Preview data")
+            st.dataframe(df.head(10), use_container_width=True, hide_index=True)
+
+            text_col = st.selectbox("Pilih kolom teks ulasan:", df.columns, key="textcol_main")
+
+            if st.button("Generate Output", type="primary", key="run_upload"):
+                work = df.copy().head(int(max_rows))
+                work[text_col] = work[text_col].fillna("").astype(str)
+
+                with st.spinner("Loading resources..."):
+                    res = get_resources(load_indobert=use_indobert)
+
+                out_rows = []
+                token_texts = []
+                sw = res["stop_words"]
+
+                with st.spinner("Memproses baris..."):
+                    for review in work[text_col].tolist():
+                        cleaned = preprocess_text(review)
+                        text_lda = preprocess_text_lda(cleaned, sw)
+
+                        topik_lda = lda_topic_from_text(text_lda, res["lda_model"], res["dictionary"])
+                        sent_ib = indobert_sentiment(cleaned, res["indobert_pipe"]) if use_indobert else None
+                        if sent_ib is None:
+                            sent_ib = "neutral"
+
+                        toks = tokenize_for_coherence(cleaned, sw)
+                        if toks:
+                            token_texts.append(toks)
+
+                        out_rows.append({
+                            "Ulasan": review,
+                            "Topik LDA": topik_lda,
+                            "Sentimen IndoBERT": sent_ib,
+                        })
+
+                out_df = pd.DataFrame(out_rows)
+
+                # NRS score per ulasan
+                out_df["Score"] = out_df["Sentimen IndoBERT"].apply(
+                    lambda s: 1 if "pos" in str(s).lower() else (-1 if "neg" in str(s).lower() else 0)
+                )
+
+                # (OPSIONAL) prediksi LSTM juga di tab upload
+                if show_lstm_pred:
+                    with st.spinner("Menjalankan prediksi LSTM (topik & sentimen)..."):
+                        pred_topic_lbl, pred_sent_lbl = lstm_predict_topic_sent(work[text_col].tolist(), res)
+                    out_df["Topik LSTM"] = pred_topic_lbl
+                    out_df["Sentimen LSTM"] = pred_sent_lbl
+
+                st.divider()
+
+                # ---- COHERENCE ----
+                st.subheader("Koherensi LDA")
+                saved = load_saved_lda_coherence()
+                if saved is not None:
+                    st.caption("Koherensi dibaca dari file lda_coherence.json (recommended).")
+                    st.json(saved)
                 else:
-                    st.write(f"**Coherence (c_v, approx dari sample upload): {coh:.4f}**")
+                    coh = compute_lda_coherence_from_tokens(res["lda_model"], res["dictionary"], token_texts[:200])
+                    if coh is None:
+                        st.warning("Koherensi tidak bisa dihitung (model/dictionary tidak tersedia atau token kurang).")
+                        st.caption("Saran: simpan koherensi dari notebook training ke lda_coherence.json.")
+                    else:
+                        st.write(f"**Coherence (c_v, approx dari sample upload): {coh:.4f}**")
 
-            st.divider()
+                st.divider()
 
-            # ---- PREVIEW OUTPUT (COMPACT TABLE) ----
-            st.subheader("Output per Ulasan (Ringkas)")
-            default_cols = ["Ulasan", "Topik LDA", "Sentimen IndoBERT", "Score"]
-            show_cols = st.multiselect(
-                "Pilih kolom yang ingin ditampilkan",
-                options=list(out_df.columns),
-                default=default_cols
-            )
-            st.dataframe(out_df[show_cols].head(50), use_container_width=True, hide_index=True)
+                # ---- PREVIEW OUTPUT ----
+                st.subheader("Output per Ulasan (Ringkas)")
+                default_cols = ["Ulasan", "Topik LDA", "Sentimen IndoBERT", "Score"]
+                if show_lstm_pred:
+                    default_cols += ["Topik LSTM", "Sentimen LSTM"]
 
-            st.divider()
+                show_cols = st.multiselect(
+                    "Pilih kolom yang ingin ditampilkan",
+                    options=list(out_df.columns),
+                    default=default_cols,
+                    key="cols_main"
+                )
+                st.dataframe(out_df[show_cols].head(50), use_container_width=True, hide_index=True)
+
+                st.divider()
+
+                # ---- NRS PER TOPIK ----
+                st.subheader("Ranking NRS per Topik (berdasarkan IndoBERT)")
+                topic_nrs = build_topic_nrs_table(out_df, topic_col="Topik LDA", sent_col="Sentimen IndoBERT")
+                st.dataframe(topic_nrs, use_container_width=True, hide_index=True)
+
+                st.divider()
+
+                # ---- QUICK SUMMARY ----
+                st.subheader("Ringkasan Cepat")
+                total = len(out_df)
+                pos = int((out_df["Score"] == 1).sum())
+                neu = int((out_df["Score"] == 0).sum())
+                neg = int((out_df["Score"] == -1).sum())
+                net_percent = ((pos - neg) / total * 100) if total else 0.0
+
+                a, b = st.columns(2)
+                with a:
+                    st.caption("Jumlah Ulasan")
+                    st.write(f"**{total}**")
+                    st.caption("Positif / Netral / Negatif")
+                    st.write(f"**{pos} / {neu} / {neg}**")
+                with b:
+                    st.caption("Net Reputable Score (global)")
+                    st.write(f"**{net_percent:.2f}%**")
+                    st.caption("Rumus: (Positif - Negatif) / Total × 100")
+
+                # download
+                st.download_button(
+                    "Download Output Per Ulasan (CSV)",
+                    data=out_df.to_csv(index=False).encode("utf-8"),
+                    file_name="output_ulasan_lda_indobert_lstm.csv" if show_lstm_pred else "output_ulasan_lda_indobert.csv",
+                    mime="text/csv",
+                )
+                st.download_button(
+                    "Download Ranking NRS per Topik (CSV)",
+                    data=topic_nrs.to_csv(index=False).encode("utf-8"),
+                    file_name="ranking_nrs_per_topik.csv",
+                    mime="text/csv",
+                )
+
 
             # ---- NRS PER TOPIK ----
             st.subheader("Ranking NRS per Topik")
