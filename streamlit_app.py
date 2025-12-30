@@ -103,7 +103,7 @@ normalization_dict = {
 more_stopword = ["dengan", "ia", "bahwa", "oleh", "nya", "dana"]
 
 
-def build_stopwords() -> set:
+build_stopwords() -> set:
     additional = []
     if os.path.exists(STOPWORD_PATH):
         with open(STOPWORD_PATH, "r", encoding="utf-8") as f:
@@ -117,10 +117,10 @@ def build_stopwords() -> set:
 # =========================================================
 # Preprocess
 # =========================================================
-def normalize_repeated_characters(text: str) -> str:
+normalize_repeated_characters(text: str) -> str:
     return re.sub(r"(.)\1{2,}", r"\1", text)
 
-def preprocess_text(text: str) -> str:
+preprocess_text(text: str) -> str:
     text = str(text)
     text = normalize_repeated_characters(text)
     text = emoji.demojize(text)
@@ -138,13 +138,13 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def preprocess_text_lda(cleaned_text: str, stop_words: set) -> str:
+preprocess_text_lda(cleaned_text: str, stop_words: set) -> str:
     t = stemmer.stem(cleaned_text)
     tokens = nltk.tokenize.word_tokenize(t)
     tokens = [x for x in tokens if x not in stop_words and len(x) > 2]
     return " ".join(tokens)
 
-def tokenize_for_coherence(cleaned_text: str, stop_words: set) -> List[str]:
+tokenize_for_coherence(cleaned_text: str, stop_words: set) -> List[str]:
     t = stemmer.stem(cleaned_text)
     tokens = nltk.tokenize.word_tokenize(t)
     tokens = [x for x in tokens if x not in stop_words and len(x) > 2]
@@ -165,7 +165,7 @@ topic_name_map_lda = {
 # =========================================================
 # Coherence
 # =========================================================
-def load_saved_lda_coherence() -> Optional[dict]:
+load_saved_lda_coherence() -> Optional[dict]:
     if os.path.exists(LDA_COHERENCE_PATH):
         try:
             with open(LDA_COHERENCE_PATH, "r", encoding="utf-8") as f:
@@ -174,7 +174,7 @@ def load_saved_lda_coherence() -> Optional[dict]:
             return None
     return None
 
-def compute_lda_coherence_from_tokens(lda_model, dictionary, token_texts: List[List[str]]) -> Optional[float]:
+compute_lda_coherence_from_tokens(lda_model, dictionary, token_texts: List[List[str]]) -> Optional[float]:
     if lda_model is None or dictionary is None:
         return None
     if not token_texts or len(token_texts) < 5:
@@ -189,7 +189,7 @@ def compute_lda_coherence_from_tokens(lda_model, dictionary, token_texts: List[L
 # =========================================================
 # NRS per topik
 # =========================================================
-def sentiment_bucket(label: str) -> str:
+sentiment_bucket(label: str) -> str:
     s = str(label).lower()
     if "pos" in s:
         return "positive"
@@ -197,10 +197,10 @@ def sentiment_bucket(label: str) -> str:
         return "negative"
     return "neutral"
 
-def nrs_percent(pos, neg, total):
+nrs_percent(pos, neg, total):
     return ((pos - neg) / total * 100) if total else 0.0
 
-def build_topic_nrs_table(df: pd.DataFrame, topic_col="Topik LDA", sent_col="Sentimen IndoBERT") -> pd.DataFrame:
+build_topic_nrs_table(df: pd.DataFrame, topic_col="Topik LDA", sent_col="Sentimen IndoBERT") -> pd.DataFrame:
     tmp = df.copy()
     tmp[sent_col] = tmp[sent_col].fillna("neutral").astype(str)
     tmp["_sent"] = tmp[sent_col].apply(sentiment_bucket)
@@ -226,12 +226,12 @@ def build_topic_nrs_table(df: pd.DataFrame, topic_col="Topik LDA", sent_col="Sen
 MAXLEN_TOPIC = 20
 MAXLEN_SENTIMENT = 20
 
-def load_pickled(path: str):
+load_pickled(path: str):
     with open(path, "rb") as f:
         return pickle.load(f)
 
 @st.cache_resource
-def get_resources(load_indobert: bool):
+get_resources(load_indobert: bool):
     ok, msg = ensure_nltk()
     if not ok:
         raise RuntimeError(f"NLTK belum siap: {msg}")
@@ -296,7 +296,7 @@ def get_resources(load_indobert: bool):
 # =========================================================
 # Predictors for output (LDA + IndoBERT)
 # =========================================================
-def lda_topic_from_text(text_lda: str, lda_model, dictionary) -> str:
+lda_topic_from_text(text_lda: str, lda_model, dictionary) -> str:
     if lda_model is None or dictionary is None:
         return "LDA dimatikan (file tidak lengkap / gagal load)"
     if not text_lda.strip():
@@ -308,7 +308,7 @@ def lda_topic_from_text(text_lda: str, lda_model, dictionary) -> str:
     tid = max(dist, key=lambda x: x[1])[0]
     return topic_name_map_lda.get(tid, "Unknown Topic")
 
-def indobert_sentiment(cleaned_text: str, indobert_pipe) -> Optional[str]:
+indobert_sentiment(cleaned_text: str, indobert_pipe) -> Optional[str]:
     if indobert_pipe is None:
         return None
     if not cleaned_text.strip():
@@ -329,111 +329,40 @@ def indobert_sentiment(cleaned_text: str, indobert_pipe) -> Optional[str]:
 # =========================================================
 # LSTM evaluation only
 # =========================================================
-def evaluate_lstm(df: pd.DataFrame, text_col: str, true_topic_col: str, true_sent_col: str, res: Dict) -> Dict:
-    stop_words = res["stop_words"]
+def lstm_predict_topic_sent(raw_text: str):
+    # Preprocess the raw text
+    cleaned_text = preprocess_text(raw_text)
 
-    texts = df[text_col].fillna("").astype(str).tolist()
-    texts_lda = [preprocess_text_lda(preprocess_text(t), stop_words) for t in texts]
+    # 1. Topic Prediction
+    # Convert cleaned_text into numerical sequences
+    seq_topic = tokenizer_topic.texts_to_sequences([cleaned_text])
+    # Pad these sequences to a uniform length
+    pad_topic = pad_sequences(seq_topic, maxlen=MAXLEN, padding='post', truncating='post')
+    # Predict the topic probabilities
+    pred_topic = lstm_topic_model.predict(pad_topic, verbose=0)
+    # Determine the predicted topic index
+    topic_idx = np.argmax(pred_topic)
+    # Decode the topic index back to its original label
+    predicted_topic_label = label_encoder_topic.inverse_transform([topic_idx])[0]
 
-    # topic pred
-    seq_topic = res["tokenizer_topic"].texts_to_sequences(texts_lda)
-    pad_topic = pad_sequences(seq_topic, maxlen=MAXLEN_TOPIC, padding="post", truncating="post")
-    pred_topic_probs = res["lstm_topic_model"].predict(pad_topic, verbose=0)
-    pred_topic_idx = np.argmax(pred_topic_probs, axis=1)
-    pred_topic_lbl = res["label_encoder_topic"].inverse_transform(pred_topic_idx)
+    # 2. Sentiment Prediction
+    # Convert cleaned_text into numerical sequences
+    seq_sent = tokenizer_sentiment.texts_to_sequences([cleaned_text])
+    # Pad these sequences to a uniform length
+    pad_sent = pad_sequences(seq_sent, maxlen=MAXLEN, padding='post', truncating='post')
+    # Predict the sentiment probabilities
+    pred_sent = lstm_sentiment_model.predict(pad_sent, verbose=0)
+    # Determine the predicted sentiment index
+    sent_idx = np.argmax(pred_sent)
+    # Decode the sentiment index back to its original label
+    predicted_sentiment_label = label_encoder_sentiment.inverse_transform([sent_idx])[0]
 
-    # sentiment pred
-    seq_sent = res["tokenizer_sentiment"].texts_to_sequences(texts_lda)
-    pad_sent = pad_sequences(seq_sent, maxlen=MAXLEN_SENTIMENT, padding="post", truncating="post")
-    pred_sent_probs = res["lstm_sentiment_model"].predict(pad_sent, verbose=0)
-    pred_sent_idx = np.argmax(pred_sent_probs, axis=1)
-    pred_sent_lbl = res["label_encoder_sentiment"].inverse_transform(pred_sent_idx)
+    return predicted_topic_label, predicted_sentiment_label
 
-    y_topic_true = df[true_topic_col].astype(str).values
-    y_sent_true = df[true_sent_col].astype(str).values
-
-    acc_topic = float(accuracy_score(y_topic_true, pred_topic_lbl))
-    acc_sent = float(accuracy_score(y_sent_true, pred_sent_lbl))
-
-    topic_labels = sorted(list(set(y_topic_true) | set(pred_topic_lbl)))
-    sent_labels = sorted(list(set(y_sent_true) | set(pred_sent_lbl)))
-
-    cm_topic = confusion_matrix(y_topic_true, pred_topic_lbl, labels=topic_labels)
-    cm_sent = confusion_matrix(y_sent_true, pred_sent_lbl, labels=sent_labels)
-
-    return {
-        "acc_topic": acc_topic,
-        "acc_sent": acc_sent,
-        "topic_labels": topic_labels,
-        "sent_labels": sent_labels,
-        "cm_topic": cm_topic,
-        "cm_sent": cm_sent,
-    }
-def evaluate_lstm(df: pd.DataFrame, text_col: str, true_topic_col: str, true_sent_col: str, res: Dict) -> Dict:
-    stop_words = res["stop_words"]
-
-    texts = df[text_col].fillna("").astype(str).tolist()
-    texts_lda = [preprocess_text_lda(preprocess_text(t), stop_words) for t in texts]
-
-    # topic pred
-    seq_topic = res["tokenizer_topic"].texts_to_sequences(texts_lda)
-    pad_topic = pad_sequences(seq_topic, maxlen=MAXLEN_TOPIC, padding="post", truncating="post")
-    pred_topic_probs = res["lstm_topic_model"].predict(pad_topic, verbose=0)
-    pred_topic_idx = np.argmax(pred_topic_probs, axis=1)
-    pred_topic_lbl = res["label_encoder_topic"].inverse_transform(pred_topic_idx)
-
-    # sentiment pred
-    seq_sent = res["tokenizer_sentiment"].texts_to_sequences(texts_lda)
-    pad_sent = pad_sequences(seq_sent, maxlen=MAXLEN_SENTIMENT, padding="post", truncating="post")
-    pred_sent_probs = res["lstm_sentiment_model"].predict(pad_sent, verbose=0)
-    pred_sent_idx = np.argmax(pred_sent_probs, axis=1)
-    pred_sent_lbl = res["label_encoder_sentiment"].inverse_transform(pred_sent_idx)
-
-    y_topic_true = df[true_topic_col].astype(str).values
-    y_sent_true = df[true_sent_col].astype(str).values
-
-    acc_topic = float(accuracy_score(y_topic_true, pred_topic_lbl))
-    acc_sent = float(accuracy_score(y_sent_true, pred_sent_lbl))
-
-    topic_labels = sorted(list(set(y_topic_true) | set(pred_topic_lbl)))
-    sent_labels = sorted(list(set(y_sent_true) | set(pred_sent_lbl)))
-
-    cm_topic = confusion_matrix(y_topic_true, pred_topic_lbl, labels=topic_labels)
-    cm_sent = confusion_matrix(y_sent_true, pred_sent_lbl, labels=sent_labels)
-
-    return {
-        "acc_topic": acc_topic,
-        "acc_sent": acc_sent,
-        "topic_labels": topic_labels,
-        "sent_labels": sent_labels,
-        "cm_topic": cm_topic,
-        "cm_sent": cm_sent,
-    }
-
-
-
-# =========================================================
-# OUTPUT COMPACT (tanpa CSS)
-# =========================================================
-def render_result_compact(topik_lda: str, sent_ib: str, nrs_value, notes: str = ""):
-    st.subheader("Hasil")
-
-    # Baris ringkas (tanpa metric)
-    c1, c2, c3 = st.columns([2, 1, 1], gap="medium")
-    with c1:
-        st.caption("Topik LDA")
-        st.write(f"**{topik_lda}**")
-    with c2:
-        st.caption("Sentimen IndoBERT")
-        st.write(f"**{sent_ib}**")
-    with c3:
-        st.caption("Net Reputable Score")
-        st.write(f"**{nrs_value}**")
-
-    if notes:
-        with st.expander("Catatan", expanded=False):
-            st.write(notes)
-
+print("Kode fungsi `lstm_predict_topic_sent`:")
+# For demonstration purposes, print the function definition
+import inspect
+print(inspect.getsource(lstm_predict_topic_sent))
 
 # =========================================================
 # UI
