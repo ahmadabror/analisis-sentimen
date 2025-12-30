@@ -257,6 +257,7 @@ def get_resources(load_indobert: bool):
     lstm_sentiment_model = load_model("lstm_sentiment_model.h5")
     tokenizer_sentiment = load_pickled("tokenizer_sentiment.pkl")
     label_encoder_sentiment = load_pickled("label_encoder_sentiment.pkl")
+    
 
     # IndoBERT optional
     indobert_pipe = None
@@ -368,6 +369,25 @@ def evaluate_lstm(df: pd.DataFrame, text_col: str, true_topic_col: str, true_sen
         "cm_topic": cm_topic,
         "cm_sent": cm_sent,
     }
+    def lstm_predict_topic_sent(texts: List[str], res: Dict) -> Tuple[np.ndarray, np.ndarray]:
+    sw = res["stop_words"]
+    texts_lda = [preprocess_text_lda(preprocess_text(t), sw) for t in texts]
+
+    # topic
+    seq_topic = res["tokenizer_topic"].texts_to_sequences(texts_lda)
+    pad_topic = pad_sequences(seq_topic, maxlen=MAXLEN_TOPIC, padding="post", truncating="post")
+    pred_topic_probs = res["lstm_topic_model"].predict(pad_topic, verbose=0)
+    pred_topic_idx = np.argmax(pred_topic_probs, axis=1)
+    pred_topic_lbl = res["label_encoder_topic"].inverse_transform(pred_topic_idx)
+
+    # sentiment
+    seq_sent = res["tokenizer_sentiment"].texts_to_sequences(texts_lda)
+    pad_sent = pad_sequences(seq_sent, maxlen=MAXLEN_SENTIMENT, padding="post", truncating="post")
+    pred_sent_probs = res["lstm_sentiment_model"].predict(pad_sent, verbose=0)
+    pred_sent_idx = np.argmax(pred_sent_probs, axis=1)
+    pred_sent_lbl = res["label_encoder_sentiment"].inverse_transform(pred_sent_idx)
+
+    return pred_topic_lbl, pred_sent_lbl
 
 
 # =========================================================
