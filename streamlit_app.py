@@ -369,25 +369,47 @@ def evaluate_lstm(df: pd.DataFrame, text_col: str, true_topic_col: str, true_sen
         "cm_topic": cm_topic,
         "cm_sent": cm_sent,
     }
-    def lstm_predict_topic_sent(texts: List[str], res: Dict) -> Tuple[np.ndarray, np.ndarray]:
-    sw = res["stop_words"]
-    texts_lda = [preprocess_text_lda(preprocess_text(t), sw) for t in texts]
+def evaluate_lstm(df: pd.DataFrame, text_col: str, true_topic_col: str, true_sent_col: str, res: Dict) -> Dict:
+    stop_words = res["stop_words"]
 
-    # topic
+    texts = df[text_col].fillna("").astype(str).tolist()
+    texts_lda = [preprocess_text_lda(preprocess_text(t), stop_words) for t in texts]
+
+    # topic pred
     seq_topic = res["tokenizer_topic"].texts_to_sequences(texts_lda)
     pad_topic = pad_sequences(seq_topic, maxlen=MAXLEN_TOPIC, padding="post", truncating="post")
     pred_topic_probs = res["lstm_topic_model"].predict(pad_topic, verbose=0)
     pred_topic_idx = np.argmax(pred_topic_probs, axis=1)
     pred_topic_lbl = res["label_encoder_topic"].inverse_transform(pred_topic_idx)
 
-    # sentiment
+    # sentiment pred
     seq_sent = res["tokenizer_sentiment"].texts_to_sequences(texts_lda)
     pad_sent = pad_sequences(seq_sent, maxlen=MAXLEN_SENTIMENT, padding="post", truncating="post")
     pred_sent_probs = res["lstm_sentiment_model"].predict(pad_sent, verbose=0)
     pred_sent_idx = np.argmax(pred_sent_probs, axis=1)
     pred_sent_lbl = res["label_encoder_sentiment"].inverse_transform(pred_sent_idx)
 
-    return pred_topic_lbl, pred_sent_lbl
+    y_topic_true = df[true_topic_col].astype(str).values
+    y_sent_true = df[true_sent_col].astype(str).values
+
+    acc_topic = float(accuracy_score(y_topic_true, pred_topic_lbl))
+    acc_sent = float(accuracy_score(y_sent_true, pred_sent_lbl))
+
+    topic_labels = sorted(list(set(y_topic_true) | set(pred_topic_lbl)))
+    sent_labels = sorted(list(set(y_sent_true) | set(pred_sent_lbl)))
+
+    cm_topic = confusion_matrix(y_topic_true, pred_topic_lbl, labels=topic_labels)
+    cm_sent = confusion_matrix(y_sent_true, pred_sent_lbl, labels=sent_labels)
+
+    return {
+        "acc_topic": acc_topic,
+        "acc_sent": acc_sent,
+        "topic_labels": topic_labels,
+        "sent_labels": sent_labels,
+        "cm_topic": cm_topic,
+        "cm_sent": cm_sent,
+    }
+
 
 
 # =========================================================
